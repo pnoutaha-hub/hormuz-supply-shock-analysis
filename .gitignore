@@ -1,0 +1,9 @@
+.DS_Store
+.env
+*.pgpass
+*.dump
+*.backup
+*.sql.gz
+*.tmp
+*.log
+*.twb~
