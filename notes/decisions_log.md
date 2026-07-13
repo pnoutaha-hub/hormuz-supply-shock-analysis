@@ -129,4 +129,70 @@ Format per entry: **Question → Options considered → Reasoning → Decision**
 
 ---
 
+### 8. Day 4 validation scope — null checks and value-range checks completed; duplicate checks skipped
+
+**Question:** How thorough should Day 4's data-cleaning validation be — which checks were worth running across all 8 tables, and which could reasonably be skipped?
+
+**Options considered:**
+- Run a full suite of checks per table: null counts, min/max value ranges, duplicate-row detection, and date-range confirmation.
+- Run only null checks and value-range checks, skipping duplicate detection and explicit date-range confirmation as separate steps.
+
+**Reasoning:**
+- Null checks (`COUNT(*)` vs `COUNT(column)`) and value-range checks (`MIN`/`MAX` sanity-checked against real historical context, e.g. Brent's 1998 low and 2008 high) are the checks most likely to catch a genuine import problem, and every one of the 8 tables passed both cleanly.
+- By Day 4, row counts had already been verified at each import step during Day 3 (33 for CE tables, 396 for CPI tables, 1584 for PCE) against expected counts derived from the raw file structure — this made a separate explicit duplicate-row check low-value, since an undetected duplicate would very likely have already shown up as a row-count mismatch at import time.
+- Given the low marginal value of the duplicate check relative to the friction encountered writing the combined multi-table query for it, it was consciously skipped rather than pushed through, in favor of moving forward to Day 5.
+
+**Decision:** Day 4 validation was limited to null checks and value-range checks across all 8 tables (all passed). Explicit duplicate-row detection and standalone date-range confirmation queries were skipped as a deliberate scope decision, relying instead on the row-count verification already performed during Day 3's imports.
+
+---
+
+### 9. PCE pivoted from long to wide format before joining into master_monthly
+
+**Question:** `pce_by_category` holds 4 categories stacked in long format (one row per date per category). Since the join target (`master_monthly`) needed one row per month with all variables as separate columns, how should PCE be brought into that structure?
+
+**Options considered:**
+- Join in only one PCE category directly (e.g., just Gasoline_and_Energy_Goods), keeping the join simple.
+- Pivot all 4 PCE categories into separate columns (`pce_total`, `pce_goods`, `pce_gasoline_energy`, `pce_services`) first, then join the pivoted table.
+
+**Reasoning:**
+- Joining in only one category would have permanently discarded the Total, Goods, and Services context that had already been deliberately extracted back on Day 2/3 specifically because they were useful denominators and comparison points for the spending-share analysis.
+- Pivoting first (using `CASE WHEN` + `MAX()` + `GROUP BY obs_date`) preserves all 4 categories as separate columns in a single row per month, matching the wide structure of every other table being joined, and avoids the join producing duplicate rows per date (which would have happened if the long-format PCE table were joined directly against the other single-row-per-date tables).
+
+**Decision:** Created `pce_by_category_wide` via a pivot query before joining, giving `master_monthly` four distinct PCE columns instead of a single blended or arbitrarily-chosen category.
+
+---
+
+### 10. Annual CE data joined into master_monthly by year, not exact date
+
+**Question:** `ce_total_expenditures`, `ce_transportation`, and `ce_gasoline` are annual (one row per year), while `master_monthly` is monthly. How should these be joined without either losing the annual data or fabricating monthly detail that doesn't exist in the source?
+
+**Options considered:**
+- Attempt to join on exact date, which would fail to match monthly rows to yearly rows entirely.
+- Join using `EXTRACT(YEAR FROM obs_month) = obs_year`, so every month within a given year attaches to that year's single annual CE value.
+
+**Reasoning:**
+- CE data has no monthly granularity in the source — repeating the annual figure across every month of that year is the honest way to bring it into a monthly table without inventing precision the underlying survey doesn't provide.
+- This was verified directly: querying all 12 months of 2011 confirmed `ce_transportation` returned the identical value (8293) for every month, and the overall row count of the joined table stayed at 470 (unchanged from the pre-CE-join `master_monthly`), confirming the year-based join didn't duplicate any rows.
+
+**Decision:** Joined all three CE tables into `master_monthly_full` using `LEFT JOIN ... ON EXTRACT(YEAR FROM m.obs_month) = ce_table.obs_year`, accepting that CE columns will show the same value repeated across all 12 months of a given year — a documented and intentional limitation of using annual survey data alongside monthly indices.
+
+---
+
+### 11. Rolling average window set to 3 months, applied to gasoline CPI
+
+**Question:** What window length should the rolling average use, and which variable(s) should it be applied to?
+
+**Options considered:**
+- A longer window (e.g., 6 or 12 months), which would smooth more aggressively.
+- A shorter window (3 months), balancing noise reduction against still being responsive to real shocks within the ~12-24 month event windows already established.
+- Applying the rolling average to every numeric column vs. only the primary variable of interest (gasoline CPI).
+
+**Reasoning:**
+- A 3-month window meaningfully reduces single-month noise while still being short enough to reflect real movement within event windows that are themselves only 12-24 months long (a 12-month rolling average would blur an entire Tanker Attacks-length window into a single smoothed value, defeating its purpose).
+- Gasoline CPI was chosen as the variable to smooth since it's the project's core variable of interest, established since Day 6 as showing the clearest event-period signal; applying rolling averages to every column would add unused columns without a clear analytical purpose at this stage.
+
+**Decision:** Added a 3-month rolling average (`cpi_gasoline_rolling_3mo`) and the existing month-over-month percent change (`cpi_gasoline_pct_change`) as permanent columns in `master_monthly_final`, built directly on top of `master_monthly_full` via window functions (`AVG() OVER (...)`, `LAG() OVER (...)`).
+
+---
+
 *(Future entries will be appended here as new methodological decisions come up during the project.)*
